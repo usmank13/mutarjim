@@ -9,6 +9,10 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorCli
 from moviepy.video.tools.subtitles import SubtitlesClip
 from yt_dlp import YoutubeDL
 
+# TODO: Use openai speech to text api instead of local whisper (add the option)
+# TODO: improve visuals of the font, etc. 
+# TODO: support for longer videos
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='AutoCaptioning: Subtitle videos automatically')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0')
@@ -20,7 +24,7 @@ def parse_arguments():
                              help='Download video from YouTube')
     input_group.add_argument('--input_file', type=str, 
                              help='Path to local input video file')
-    
+    parser.add_argument('--use_api', action='store_true',)
     parser.add_argument('--url', type=str, 
                         help='URL of YouTube video (required if --download is used)')
     parser.add_argument('--model_type', type=str, default='base', 
@@ -118,9 +122,19 @@ def process_local_video(input_path, output_video_path, output_audio_path):
     video.write_videofile(output_video_path)
     video.audio.write_audiofile(output_audio_path)
 
+# using the local model
 def transcribe_audio(audio_path, model_type, lang):
     model = whisper.load_model(model_type)
     return model.transcribe(audio_path, task='translate', language=lang)
+
+# using the api
+def transcribe_api(openai_client, audio_path):
+    audio_file = open(audio_path)
+    transcription = openai_client.audio.translations.create(
+        model="whisper-1", 
+        file=audio_file
+    )
+    return transcription
 
 def create_subtitles_df(result):
     return pd.DataFrame({
@@ -148,9 +162,11 @@ def export_subtitles(subs_df, format, output_path):
         raise ValueError(f"Unsupported subtitle format: {format}")
 
 def subtitle_video(args):
+    # make the experiment directory
     experiment_dir = f'experiments/{args.name}'
     os.makedirs(experiment_dir, exist_ok=True)
     
+    # get the file paths
     input_file = os.path.join(experiment_dir, 'input.mp4')
     audio_file = os.path.join(experiment_dir, 'audio.mp3')
     output_file = os.path.join(experiment_dir, f'output.{args.output_format}')
@@ -163,12 +179,15 @@ def subtitle_video(args):
     else:
         process_local_video(args.input_file, input_file, audio_file)
     
-    result = transcribe_audio(audio_file, args.model_type, args.source_language)
+    openai_client = setup_openai_client()
+    if args.use_api: # new, using the api
+        result = transcribe_api(openai_client, audio_file)
+    else: # what we already had
+        result = transcribe_audio(audio_file, args.model_type, args.source_language)
     subs_df = create_subtitles_df(result)
     subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
     
-    if args.llm_refine:
-        openai_client = setup_openai_client()
+    if args.llm_refine: # 
         fixed_subs = fix_subtitles(subs_df, openai_client)
         subs_df = pd.read_csv(StringIO(fixed_subs))
         subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
