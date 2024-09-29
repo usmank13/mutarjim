@@ -1,6 +1,7 @@
 import argparse
 from io import StringIO
 import os
+
 import openai
 import pandas as pd
 import whisper
@@ -67,8 +68,7 @@ def fix_subtitles(subs_df, openai_client):
         completion = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system",
-                 "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English."},
+                {"role": "system", "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -113,30 +113,29 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
         video = VideoFileClip(vid_path)
         width, height = video.w, video.h
 
-        # Adjust font size based on video resolution for better readability
-        font_size = width // 35  # Dynamic font size scaling
-        stroke_width = 2  # Adjust stroke width for clearer text borders
+        font_size = width // 35
+        stroke_width = 2
 
         generator = lambda txt: TextClip(
             txt,
-            font='Arial-Bold',  # Clean and professional font
+            font='Arial-Bold',
             fontsize=font_size,
             stroke_width=stroke_width,
-            color='white',  # White font
-            stroke_color='black',  # Black stroke
+            color='white',
+            stroke_color='black',
             method='caption'
         ).set_position(('center', 'bottom'), relative=True).margin(
-            bottom=20)  # Position slightly above bottom for better viewing
+            bottom=20)
 
-        # Subtitle data handling
+        # subtitle data handling
         subs = list(zip(zip(subs_df['start'], subs_df['end']), subs_df['text']))
         subtitles = SubtitlesClip(subs, generator)
 
-        # Composite video and subtitles
-        final = CompositeVideoClip([video, subtitles.set_pos(('center', 'bottom'))])
+        # composite video and subtitles
+        final = CompositeVideoClip([video, subtitles.set_position(('center', 'bottom'))])
         final = final.set_duration(video.duration)
 
-        # Output file saving
+        # output file saving
         output_path = os.path.join(save_dir, 'output_vid.mp4')
         final.write_videofile(output_path, fps=video.fps, remove_temp=True, codec="libx264", audio_codec="aac")
 
