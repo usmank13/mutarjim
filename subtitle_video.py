@@ -175,12 +175,12 @@ def transcribe_audio(audio_path, model_type, lang):
 
 # using the api
 def transcribe_api(openai_client, audio_path):
-    audio_file = open(audio_path)
+    audio_file = open(audio_path, "rb")
     transcription = openai_client.audio.translations.create(
         model="whisper-1", 
         file=audio_file
     )
-    return transcription
+    return transcription.text
 
 def create_subtitles_df(result):
     try:
@@ -232,21 +232,27 @@ def subtitle_video(args):
             download_youtube_video(args.url, aud_opts, vid_opts)
         else:
             process_local_video(args.input_file, input_file, audio_file)
+    
+      openai_client = setup_openai_client()
+      if args.use_api: # new, using the api
+          result = transcribe_api(openai_client, audio_file)
+          # we know there's a problem here
+          print(result) # this will tell us more about the format in which the api gives us the result
+      else: # what we already had
+          result = transcribe_audio(audio_file, args.model_type, args.source_language)
+          subs_df = create_subtitles_df(result)
+          subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
 
-        result = transcribe_audio(audio_file, args.model_type, args.source_language)
-        subs_df = create_subtitles_df(result)
-        subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
+          if args.llm_refine:
+              openai_client = setup_openai_client()
+              fixed_subs = fix_subtitles(subs_df, openai_client)
+              subs_df = pd.read_csv(StringIO(fixed_subs))
+              subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
 
-        if args.llm_refine:
-            openai_client = setup_openai_client()
-            fixed_subs = fix_subtitles(subs_df, openai_client)
-            subs_df = pd.read_csv(StringIO(fixed_subs))
-            subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
-
-        if args.output_format == 'mp4':
-            create_captioned_vid(input_file, subs_df, experiment_dir)
-        else:
-            export_subtitles(subs_df, args.output_format, output_file)
+          if args.output_format == 'mp4':
+              create_captioned_vid(input_file, subs_df, experiment_dir)
+          else:
+              export_subtitles(subs_df, args.output_format, output_file)
     except Exception as e:
         print(f"Error processing subtitles: {e}")
 
