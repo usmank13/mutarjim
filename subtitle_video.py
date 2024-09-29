@@ -233,12 +233,12 @@ def subtitle_video(args):
         else:
             process_local_video(args.input_file, input_file, audio_file)
     
-      openai_client = setup_openai_client()
-      if args.use_api: # new, using the api
+        openai_client = setup_openai_client()
+        if args.use_api: # new, using the api
           result = transcribe_api(openai_client, audio_file)
           # we know there's a problem here
           print(result) # this will tell us more about the format in which the api gives us the result
-      else: # what we already had
+        else: # what we already had
           result = transcribe_audio(audio_file, args.model_type, args.source_language)
           subs_df = create_subtitles_df(result)
           subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
