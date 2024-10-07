@@ -14,6 +14,8 @@ from yt_dlp import YoutubeDL
 # TODO: support for longer videos
 
 def parse_arguments():
+    import sys
+
     parser = argparse.ArgumentParser(description='AutoCaptioning: Subtitle videos automatically')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0')
     parser.add_argument('--name', type=str, required=True, 
@@ -38,6 +40,17 @@ def parse_arguments():
                         choices=['mp4', 'srt', 'vtt'],
                         help='Output format (default: mp4)')
 
+    # Set default values for command-line arguments
+    sys.argv = [
+        'script_name.py',
+        '--name', 'default_experiment',
+        '--model_type', 'base',
+        '--download',
+        '--url', 'https://www.youtube.com/watch?v=XEbRDyvVd-Y',
+        '--use_api',
+        '--source_language', 'arabic',
+        '--output_format', 'mp4'
+    ]
     args = parser.parse_args()
 
     if args.download and not args.url:
@@ -132,9 +145,23 @@ def transcribe_api(openai_client, audio_path):
     audio_file = open(audio_path, "rb")
     transcription = openai_client.audio.translations.create(
         model="whisper-1", 
-        file=audio_file
+        file=audio_file,
+        response_format='verbose_json'
     )
-    return transcription.text
+    # Convert the API response to a dictionary format similar to the local model output
+    result = {
+        "text": transcription.text,
+        "segments": [
+            {
+                "start": segment["start"],
+                "end": segment["end"],
+                "text": segment["text"]
+            }
+            for segment in transcription.segments
+        ]
+    }
+    
+    return result
 
 def create_subtitles_df(result):
     return pd.DataFrame({
@@ -182,8 +209,6 @@ def subtitle_video(args):
     openai_client = setup_openai_client()
     if args.use_api: # new, using the api
         result = transcribe_api(openai_client, audio_file)
-        # we know there's a problem here
-        print(result) # this will tell us more about the format in which the api gives us the result
     else: # what we already had
         result = transcribe_audio(audio_file, args.model_type, args.source_language)
     subs_df = create_subtitles_df(result)
