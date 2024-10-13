@@ -226,34 +226,31 @@ def subtitle_video(args):
     aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': audio_file}
     vid_opts = {'format': 'mp4/bestvideo/best', 'outtmpl': input_file}
 
-    try:
-        if args.download:
-            download_youtube_video(args.url, aud_opts, vid_opts)
-        else:
-            process_local_video(args.input_file, input_file, audio_file)
-    
-        openai_client = setup_openai_client()
-        if args.use_api: # new, using the api
-          result = transcribe_api(openai_client, audio_file)
-          # we know there's a problem here
-          print(result) # this will tell us more about the format in which the api gives us the result
-        else: # what we already had
-          result = transcribe_audio(audio_file, args.model_type, args.source_language)
-          subs_df = create_subtitles_df(result)
-          subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
+    if args.download:
+        download_youtube_video(args.url, aud_opts, vid_opts)
+    else:
+        process_local_video(args.input_file, input_file, audio_file)
 
-          if args.llm_refine:
-              openai_client = setup_openai_client()
-              fixed_subs = fix_subtitles(subs_df, openai_client)
-              subs_df = pd.read_csv(StringIO(fixed_subs))
-              subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
+    openai_client = setup_openai_client()
+    if args.use_api: # new, using the api
+      result = transcribe_api(openai_client, audio_file)
+      # we know there's a problem here
+      print(result) # this will tell us more about the format in which the api gives us the result
+    else: # what we already had
+      result = transcribe_audio(audio_file, args.model_type, args.source_language)
+      subs_df = create_subtitles_df(result)
+      subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
 
-          if args.output_format == 'mp4':
-              create_captioned_vid(input_file, subs_df, experiment_dir)
-          else:
-              export_subtitles(subs_df, args.output_format, output_file)
-    except Exception as e:
-        print(f"Error processing subtitles: {e}")
+      if args.llm_refine:
+          openai_client = setup_openai_client()
+          fixed_subs = fix_subtitles(subs_df, openai_client)
+          subs_df = pd.read_csv(StringIO(fixed_subs))
+          subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
+
+      if args.output_format == 'mp4':
+          create_captioned_vid(input_file, subs_df, experiment_dir)
+      else:
+          export_subtitles(subs_df, args.output_format, output_file)
 
 
 def main():
