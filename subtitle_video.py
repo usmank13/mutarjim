@@ -153,9 +153,9 @@ def transcribe_api(openai_client, audio_path):
         "text": transcription.text,
         "segments": [
             {
-                "start": segment["start"],
-                "end": segment["end"],
-                "text": segment["text"]
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text
             }
             for segment in transcription.segments
         ]

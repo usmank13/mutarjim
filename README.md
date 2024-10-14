@@ -3,6 +3,7 @@
 # Requirements
 - python 3.10
 - ffmpeg
+- ImageMagick
 
 ## Installation
 - Create virtual environment
