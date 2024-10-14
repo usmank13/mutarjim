@@ -8,3 +8,4 @@ moviepy
 yt_dlp
 whisper
 pandas
+openai
