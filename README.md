@@ -1,5 +1,9 @@
 # mutarjim: an Arabic video subtitler
 
+# Requirements
+- python 3.10
+- ffmpeg
+
 ## Installation
 - Create virtual environment
   ```bash
