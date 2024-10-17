@@ -9,7 +9,6 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorCli
 from moviepy.video.tools.subtitles import SubtitlesClip
 from yt_dlp import YoutubeDL
 
-# TODO: Use openai speech to text api instead of local whisper (add the option)
 # TODO: improve visuals of the font, etc. 
 # TODO: support for longer videos
 
@@ -46,9 +45,10 @@ def parse_arguments():
         '--name', 'default_experiment',
         '--model_type', 'base',
         '--download',
-        '--url', 'https://www.youtube.com/watch?v=XEbRDyvVd-Y',
+        '--url', 'https://www.youtube.com/watch?v=EvkKtYIHCQQ',
         '--use_api',
         '--source_language', 'arabic',
+        # '--llm_refine',
         '--output_format', 'mp4'
     ]
     args = parser.parse_args()
@@ -64,12 +64,14 @@ def setup_openai_client():
 def fix_subtitles(subs_df, openai_client):
     prompt = f"""Here are English subtitles translated from Arabic.
     There may be minor mistakes or awkward phrasings. Please refine these English subtitles for better coherence and fluency,
-    while staying as true to the original meaning as possible. Do not translate back to Arabic.
+    while staying as true to the original meaning as possible. Do not translate back to Arabic. It is from an Islamic lecture.
     Provide the results in the csv format, with nothing else, ensuring all rules for CSV parsing, such as appropriate
     use of escapes, are met.\n\n{subs_df.to_string()}"""
     
+    # should we set temperature?
     completion = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
+        temperature=0.1,
         messages=[
             {"role": "system", "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English."},
             {"role": "user", "content": prompt}
