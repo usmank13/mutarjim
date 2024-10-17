@@ -70,7 +70,7 @@ def fix_subtitles(subs_df, openai_client):
     
     # should we set temperature?
     completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-3.5-turbo",
         temperature=0.1,
         messages=[
             {"role": "system", "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English."},
