@@ -45,6 +45,7 @@ def parse_arguments():
         '--name', 'default_experiment',
         '--model_type', 'base',
         '--download',
+        # '--input_file', 'experiments/test2/input.mp4'
         '--url', 'https://www.youtube.com/watch?v=EvkKtYIHCQQ',
         '--use_api',
         '--source_language', 'arabic',
@@ -106,19 +107,26 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     
     generator = lambda txt: TextClip(
         txt, 
-        font='P052-Bold', 
-        fontsize=width/35,
-        stroke_width=1,
-        color='white', 
-        stroke_color='black', 
-        size=(width, height*.3),
-        method='caption'
-    )
+        font='Arial-Bold',  # Changed to Arial-Bold for better readability
+        fontsize=width/30,  # Increased font size
+        stroke_width=2,     # Increased stroke width for better visibility
+        color='white',      
+        stroke_color='black',
+        size=(width, height*.35),  # Slightly larger text area
+        method='caption',
+        align='center'      # Ensure text is centered
+    ).set_opacity(0.95)    # Slight transparency for aesthetics
     
     subs = list(zip(zip(subs_df['start'], subs_df['end']), subs_df['text']))
     subtitles = SubtitlesClip(subs, generator)
     
-    final = CompositeVideoClip([video, subtitles.set_pos(('center','bottom'))])
+    # Add a semi-transparent black background behind subtitles for better readability
+    background = ColorClip(size=(width, height*.15), 
+                          color=(0,0,0)).\
+                          set_opacity(0.6).\
+                          set_position(('center', 'bottom'))
+    
+    final = CompositeVideoClip([video, background, subtitles.set_pos(('center','bottom'))])
     final = final.set_duration(video.duration)
     
     output_path = os.path.join(save_dir, 'output_vid.mp4')
