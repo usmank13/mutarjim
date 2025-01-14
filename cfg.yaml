@@ -1,0 +1,10 @@
+# cfg.yaml
+version: 1.0
+name: example_directory
+download: true
+input_file: null
+use_api: false
+url: https://www.youtube.com/watch?v=EvkKtYIHCQQ
+model_type: base
+source_language: arabic
+output_format: mp4
