@@ -93,8 +93,8 @@ def fix_subtitles(subs_df, openai_client):
 
 def generate_subtitle_clip(txt, font_size, stroke_width):
     text_clip = TextClip(
-        txt, 
-        font='Arial-Bold', 
+        'Arial-Bold',
+        txt=txt,  
         fontsize=font_size,
         color='white', 
         stroke_color='black', 
@@ -117,33 +117,19 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     width, height = video.w, video.h
     
     def generator(txt):
-        try:
-            return TextClip(
-                txt, 
-                font='Arial',  # Try simpler font name
-                fontsize=width/30,  # Increased font size
-                stroke_width=2,     # Increased stroke width for better visibility
-                color='white',      
-                stroke_color='black',
-                size=(width, height*.35),  # Slightly larger text area
-                method='caption',
-                align='center'      # Ensure text is centered
-            ).set_opacity(0.95)    # Slight transparency for aesthetics
-        except:
-            # Fallback to basic font
-            return TextClip(
-                txt, 
-                fontsize=width/30,
-                stroke_width=2,
-                color='white',      
-                stroke_color='black',
-                size=(width, height*.35),
-                method='caption',
-                align='center'
-            ).set_opacity(0.95)
+        return TextClip(
+            text=txt,   # Try simpler font name
+            font_size=int(width/30),  # Increased font size
+            stroke_width=2,     # Increased stroke width for better visibility
+            color='white',      
+            stroke_color='black',
+            size=(width, int(height*.35)),  # Slightly larger text area
+            method='caption',
+        ).set_opacity(0.95)    # Slight transparency for aesthetics
+
     
     subs = list(zip(zip(subs_df['start'], subs_df['end']), subs_df['text']))
-    subtitles = SubtitlesClip(subs, generator)
+    subtitles = SubtitlesClip(subs, make_textclip=generator)
     
     # Add a semi-transparent black background behind subtitles for better readability
     background = ColorClip(size=(width, height*.15), 
@@ -254,7 +240,21 @@ def subtitle_video(args):
     
     # Translate transcribed subtitles using LLM
     translated_subs = translate_subtitles(subs_df, openai_client, args.get('target_language', 'English'))
-    subs_df = pd.read_csv(StringIO(translated_subs))
+    
+    # Clean up the CSV response and parse it
+    cleaned_csv = translated_subs.strip()
+    # Remove any leading/trailing commas and fix column alignment
+    lines = cleaned_csv.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        if line.strip():
+            # Remove leading comma if present
+            if line.startswith(','):
+                line = line[1:]
+            cleaned_lines.append(line)
+    
+    cleaned_csv = '\n'.join(cleaned_lines)
+    subs_df = pd.read_csv(StringIO(cleaned_csv))
     subs_df.to_csv(os.path.join(experiment_dir, 'subs_translated.csv'))
     
     if args['llm_refine']: # 
