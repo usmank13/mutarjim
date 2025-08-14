@@ -1,7 +1,7 @@
 import argparse
 from io import StringIO
 import os
-
+import torch
 import openai
 import pandas as pd
 import whisper
@@ -19,7 +19,7 @@ def load_config(config_path):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='AutoCaptioning: Subtitle videos automatically')
-    parser.add_argument('--config', type=str, required=True, 
+    parser.add_argument('--config', type=str, 
                         help='Path to the configuration YAML file', default='./cfg.yaml')
     args = parser.parse_args()
     
@@ -34,6 +34,45 @@ def parse_arguments():
 def setup_openai_client():
     return openai.Client()
 
+def translate_subtitles(subs_df, openai_client, target_lang='English'):
+    prompt = f"""Translate the following Arabic subtitles to {target_lang}. 
+    Maintain the timing and structure. Provide natural, fluent translations that preserve the original meaning.
+    This is from an Islamic lecture. Note that the transcription may have errors due to similar sounding words.
+    Use context to correct those where necessary.
+    
+    IMPORTANT: Return ONLY a CSV with exactly 3 columns: start,end,text
+    - start: start time in seconds
+    - end: end time in seconds  
+    - text: translated text (if text contains commas, wrap in double quotes)
+    
+    Example format:
+    start,end,text
+    0,5,"Hello, world"
+    5,10,"How are you?"
+    
+{subs_df.to_string()}"""
+    
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.1,
+        messages=[
+            {"role": "system", "content": f"You are a skilled translator specializing in Arabic to {target_lang} translation."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    
+    response = completion.choices[0].message.content
+    
+    # Try to extract just the CSV part if there's extra text
+    lines = response.strip().split('\n')
+    csv_lines = []
+    for line in lines:
+        if ',' in line and not line.startswith('#'):
+            csv_lines.append(line)
+    
+    csv_content = '\n'.join(csv_lines)
+    return csv_content
+
 def fix_subtitles(subs_df, openai_client):
     prompt = f"""Here are English subtitles translated from Arabic.
     There may be minor mistakes or awkward phrasings. Please refine these English subtitles for better coherence and fluency,
@@ -43,7 +82,7 @@ def fix_subtitles(subs_df, openai_client):
     
     # should we set temperature?
     completion = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         temperature=0.1,
         messages=[
             {"role": "system", "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English."},
@@ -77,17 +116,31 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     video = VideoFileClip(vid_path)
     width, height = video.w, video.h
     
-    generator = lambda txt: TextClip(
-        txt, 
-        font='Arial-Bold',  # Changed to Arial-Bold for better readability
-        fontsize=width/30,  # Increased font size
-        stroke_width=2,     # Increased stroke width for better visibility
-        color='white',      
-        stroke_color='black',
-        size=(width, height*.35),  # Slightly larger text area
-        method='caption',
-        align='center'      # Ensure text is centered
-    ).set_opacity(0.95)    # Slight transparency for aesthetics
+    def generator(txt):
+        try:
+            return TextClip(
+                txt, 
+                font='Arial',  # Try simpler font name
+                fontsize=width/30,  # Increased font size
+                stroke_width=2,     # Increased stroke width for better visibility
+                color='white',      
+                stroke_color='black',
+                size=(width, height*.35),  # Slightly larger text area
+                method='caption',
+                align='center'      # Ensure text is centered
+            ).set_opacity(0.95)    # Slight transparency for aesthetics
+        except:
+            # Fallback to basic font
+            return TextClip(
+                txt, 
+                fontsize=width/30,
+                stroke_width=2,
+                color='white',      
+                stroke_color='black',
+                size=(width, height*.35),
+                method='caption',
+                align='center'
+            ).set_opacity(0.95)
     
     subs = list(zip(zip(subs_df['start'], subs_df['end']), subs_df['text']))
     subtitles = SubtitlesClip(subs, generator)
@@ -119,13 +172,14 @@ def process_local_video(input_path, output_video_path, output_audio_path):
 
 # using the local model
 def transcribe_audio(audio_path, model_type, lang):
-    model = whisper.load_model(model_type)
-    return model.transcribe(audio_path, task='translate', language=lang)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = whisper.load_model(model_type, device=device)
+    return model.transcribe(audio_path, task='transcribe', language=lang)
 
 # using the api
 def transcribe_api(openai_client, audio_path):
     audio_file = open(audio_path, "rb")
-    transcription = openai_client.audio.translations.create(
+    transcription = openai_client.audio.transcriptions.create(
         model="whisper-1", 
         file=audio_file,
         response_format='verbose_json'
@@ -190,19 +244,25 @@ def subtitle_video(args):
         process_local_video(args['input_file'], input_file, audio_file)
     
     openai_client = setup_openai_client()
-    if args.use_api: # new, using the api
+    
+    if args['use_api']: # new, using the api
         result = transcribe_api(openai_client, audio_file)
     else: # what we already had
         result = transcribe_audio(audio_file, args['model_type'], args['source_language'])
     subs_df = create_subtitles_df(result)
-    subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
+    subs_df.to_csv(os.path.join(experiment_dir, 'subs_transcribed.csv'))
     
-    if args.llm_refine: # 
+    # Translate transcribed subtitles using LLM
+    translated_subs = translate_subtitles(subs_df, openai_client, args.get('target_language', 'English'))
+    subs_df = pd.read_csv(StringIO(translated_subs))
+    subs_df.to_csv(os.path.join(experiment_dir, 'subs_translated.csv'))
+    
+    if args['llm_refine']: # 
         fixed_subs = fix_subtitles(subs_df, openai_client)
         subs_df = pd.read_csv(StringIO(fixed_subs))
         subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
     
-    if args.output_format == 'mp4':
+    if args['output_format'] == 'mp4':
         create_captioned_vid(input_file, subs_df, experiment_dir)
     else:
         export_subtitles(subs_df, args.output_format, output_file)
