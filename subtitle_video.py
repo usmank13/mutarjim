@@ -53,8 +53,8 @@ def translate_subtitles(subs_df, openai_client, target_lang='English'):
 {subs_df.to_string()}"""
     
     completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.1,
+        model="gpt-5-mini",
+        # temperature=0.1,
         messages=[
             {"role": "system", "content": f"You are a skilled translator specializing in Arabic to {target_lang} translation."},
             {"role": "user", "content": prompt}
@@ -62,16 +62,17 @@ def translate_subtitles(subs_df, openai_client, target_lang='English'):
     )
     
     response = completion.choices[0].message.content
+    print(response)
     
     # Try to extract just the CSV part if there's extra text
-    lines = response.strip().split('\n')
-    csv_lines = []
-    for line in lines:
-        if ',' in line and not line.startswith('#'):
-            csv_lines.append(line)
+    # lines = response.strip().split('\n')
+    # csv_lines = []
+    # for line in lines:
+    #     if ',' in line and not line.startswith('#'):
+    #         csv_lines.append(line)
     
-    csv_content = '\n'.join(csv_lines)
-    return csv_content
+    # csv_content = '\n'.join(csv_lines)
+    return response
 
 def fix_subtitles(subs_df, openai_client):
     prompt = f"""Here are English subtitles translated from Arabic.
@@ -93,26 +94,28 @@ def fix_subtitles(subs_df, openai_client):
 
 def generate_subtitle_clip(txt, font_size, stroke_width):
     text_clip = TextClip(
-        'Arial-Bold',
-        txt=txt,  
-        fontsize=font_size,
+        font='Arial-Bold',
+        text=txt,  
+        font_size=font_size,
         color='white', 
         stroke_color='black', 
         stroke_width=stroke_width,
-        align='center',
+        text_align='center',
         method='caption'
-    ).set_duration(10)
+    ).with_duration(10)
     
-    text_clip = text_clip.set_position('center')
+    text_clip = text_clip.with_position('center')
     text_clip_w, text_clip_h = text_clip.size
     
-    background_clip = ColorClip(size=(text_clip_w + 20, text_clip_h + 10), color=(0, 0, 0), duration=text_clip.duration).set_opacity(0.8)
+    background_clip = ColorClip(size=(text_clip_w + 20, text_clip_h + 10), color=(0, 0, 0), duration=text_clip.duration).with_opacity(0.8)
     
-    composite_clip = CompositeVideoClip([background_clip, text_clip.set_position('center')], size=(text_clip_w + 20, text_clip_h + 10))
+    composite_clip = CompositeVideoClip([background_clip, text_clip.with_position('center')], size=(text_clip_w + 20, text_clip_h + 10))
     
-    return composite_clip.set_position('center')
+    return composite_clip.with_position('center')
 
 def create_captioned_vid(vid_path, subs_df, save_dir):
+    # TODO: this is broken in general, perhaps not compatible with the version
+    # of moviepy we are now using (latest)
     video = VideoFileClip(vid_path)
     width, height = video.w, video.h
     
@@ -125,20 +128,20 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
             stroke_color='black',
             size=(width, int(height*.35)),  # Slightly larger text area
             method='caption',
-        ).set_opacity(0.95)    # Slight transparency for aesthetics
+        ).with_opacity(0.95)    # Slight transparency for aesthetics
 
     
     subs = list(zip(zip(subs_df['start'], subs_df['end']), subs_df['text']))
     subtitles = SubtitlesClip(subs, make_textclip=generator)
     
     # Add a semi-transparent black background behind subtitles for better readability
-    background = ColorClip(size=(width, height*.15), 
+    background = ColorClip(size=(int(width), int(height*.15)), 
                           color=(0,0,0)).\
-                          set_opacity(0.6).\
-                          set_position(('center', 'bottom'))
+                          with_opacity(0.6).\
+                          with_position(('center', 'bottom'))
     
-    final = CompositeVideoClip([video, background, subtitles.set_pos(('center','bottom'))])
-    final = final.set_duration(video.duration)
+    final = CompositeVideoClip([video, background, subtitles.with_position(('center','bottom'))])
+    final = final.with_duration(video.duration)
     
     output_path = os.path.join(save_dir, 'output_vid.mp4')
     final.write_videofile(output_path, fps=video.fps, remove_temp=True, codec="libx264", audio_codec="aac")
@@ -240,21 +243,7 @@ def subtitle_video(args):
     
     # Translate transcribed subtitles using LLM
     translated_subs = translate_subtitles(subs_df, openai_client, args.get('target_language', 'English'))
-    
-    # Clean up the CSV response and parse it
-    cleaned_csv = translated_subs.strip()
-    # Remove any leading/trailing commas and fix column alignment
-    lines = cleaned_csv.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        if line.strip():
-            # Remove leading comma if present
-            if line.startswith(','):
-                line = line[1:]
-            cleaned_lines.append(line)
-    
-    cleaned_csv = '\n'.join(cleaned_lines)
-    subs_df = pd.read_csv(StringIO(cleaned_csv))
+    subs_df = pd.read_csv(StringIO(translated_subs))
     subs_df.to_csv(os.path.join(experiment_dir, 'subs_translated.csv'))
     
     if args['llm_refine']: # 
