@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import dataclass
 from io import StringIO
 import os
 import torch
@@ -12,6 +13,31 @@ import yaml
 
 # TODO: improve visuals of the font, etc. 
 # TODO: support for longer videos
+
+@dataclass
+class ProjectPaths:
+    experiment_dir: str
+    input_video: str = None
+    audio: str = None
+    transcribed_csv: str = None
+    translated_csv: str = None
+    refined_csv: str = None
+    output_video: str = None
+    
+    def __post_init__(self):
+        if self.input_video is None:
+            self.input_video = os.path.join(self.experiment_dir, 'input.mp4')
+        if self.audio is None:
+            self.audio = os.path.join(self.experiment_dir, 'audio.mp3')
+        if self.transcribed_csv is None:
+            self.transcribed_csv = os.path.join(self.experiment_dir, 'subs_transcribed.csv')
+        if self.translated_csv is None:
+            self.translated_csv = os.path.join(self.experiment_dir, 'subs_translated.csv')
+        if self.refined_csv is None:
+            self.refined_csv = os.path.join(self.experiment_dir, 'subs_auto_edited.csv')
+        if self.output_video is None:
+            self.output_video = os.path.join(self.experiment_dir, 'output_vid.mp4')
+
 def load_config(config_path):
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
@@ -21,14 +47,32 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='AutoCaptioning: Subtitle videos automatically')
     parser.add_argument('--config', type=str, 
                         help='Path to the configuration YAML file', default='./cfg.yaml')
+    
+    # New stage-based entry points
+    parser.add_argument('--from-transcript', type=str, choices=['transcribed', 'translated', 'refined'],
+                        help='Start from existing transcript stage')
+    parser.add_argument('--from-audio', action='store_true',
+                        help='Start from existing audio file (skip video download/processing)')
+    parser.add_argument('--video', type=str,
+                        help='Path to video file (required for --from-transcript)')
+    parser.add_argument('--transcript', type=str,
+                        help='Path to transcript CSV file (required for --from-transcript)')
+    
     args = parser.parse_args()
     
     config = load_config(args.config)
     
+    # Validation
     if config.get('download') and not config.get('url'):
         parser.error("URL is required when download is set to true")
     
-    return config
+    if args.from_transcript:
+        if not args.video:
+            parser.error("--video is required when using --from-transcript")
+        if not args.transcript:
+            parser.error("--transcript is required when using --from-transcript")
+    
+    return args, config
 
 
 def setup_openai_client():
@@ -213,52 +257,107 @@ def export_subtitles(subs_df, format, output_path):
     else:
         raise ValueError(f"Unsupported subtitle format: {format}")
 
-def subtitle_video(args):
-    # make the experiment directory
-    experiment_dir = f'experiments/{args['name']}'
-    os.makedirs(experiment_dir, exist_ok=True)
-    
-    # get the file paths
-    input_file = os.path.join(experiment_dir, 'input.mp4')
-    audio_file = os.path.join(experiment_dir, 'audio.mp3')
-    output_file = os.path.join(experiment_dir, f'output.{args['output_format']}')
-    
-    aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': audio_file}
-    vid_opts = {'format': 'mp4/bestvideo/best', 'outtmpl': input_file}
-    
-    if args['download']:
-        download_youtube_video(args['url'], aud_opts, vid_opts)
-    else:
-        assert args['input_file'], "Input file is required when download is set to false"
-        process_local_video(args['input_file'], input_file, audio_file)
-    
+def load_transcript_csv(csv_path):
+    return pd.read_csv(csv_path, index_col=0)
+
+def run_from_transcript(paths, config, stage='transcribed'):
     openai_client = setup_openai_client()
     
-    if args['use_api']: # new, using the api
-        result = transcribe_api(openai_client, audio_file)
-    else: # what we already had
-        result = transcribe_audio(audio_file, args['model_type'], args['source_language'])
-    subs_df = create_subtitles_df(result)
-    subs_df.to_csv(os.path.join(experiment_dir, 'subs_transcribed.csv'))
-    
-    # Translate transcribed subtitles using LLM
-    translated_subs = translate_subtitles(subs_df, openai_client, args.get('target_language', 'English'))
-    subs_df = pd.read_csv(StringIO(translated_subs))
-    subs_df.to_csv(os.path.join(experiment_dir, 'subs_translated.csv'))
-    
-    if args['llm_refine']: # 
-        fixed_subs = fix_subtitles(subs_df, openai_client)
-        subs_df = pd.read_csv(StringIO(fixed_subs))
-        subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
-    
-    if args['output_format'] == 'mp4':
-        create_captioned_vid(input_file, subs_df, experiment_dir)
+    # Load transcript from specified stage
+    if stage == 'transcribed':
+        subs_df = load_transcript_csv(paths.transcribed_csv)
+        # Continue with translation
+        translated_subs = translate_subtitles(subs_df, openai_client, config.get('target_language', 'English'))
+        subs_df = pd.read_csv(StringIO(translated_subs))
+        subs_df.to_csv(paths.translated_csv)
+        
+        # Optional refinement
+        if config.get('llm_refine'):
+            fixed_subs = fix_subtitles(subs_df, openai_client)
+            subs_df = pd.read_csv(StringIO(fixed_subs))
+            subs_df.to_csv(paths.refined_csv)
+            
+    elif stage == 'translated':
+        subs_df = load_transcript_csv(paths.translated_csv)
+        # Optional refinement only
+        if config.get('llm_refine'):
+            fixed_subs = fix_subtitles(subs_df, openai_client)
+            subs_df = pd.read_csv(StringIO(fixed_subs))
+            subs_df.to_csv(paths.refined_csv)
+            
+    elif stage == 'refined':
+        subs_df = load_transcript_csv(paths.refined_csv)
     else:
-        export_subtitles(subs_df, args.output_format, output_file)
+        raise ValueError(f"Unknown stage: {stage}")
+    
+    # Generate final output
+    if config.get('output_format') == 'mp4':
+        create_captioned_vid(paths.input_video, subs_df, paths.experiment_dir)
+    else:
+        output_file = os.path.join(paths.experiment_dir, f'output.{config["output_format"]}')
+        export_subtitles(subs_df, config['output_format'], output_file)
+
+def run_from_audio(paths, config):
+    openai_client = setup_openai_client()
+    
+    # Transcribe audio
+    if config.get('use_api'):
+        result = transcribe_api(openai_client, paths.audio)
+    else:
+        result = transcribe_audio(paths.audio, config.get('model_type'), config.get('source_language'))
+    
+    subs_df = create_subtitles_df(result)
+    subs_df.to_csv(paths.transcribed_csv)
+    
+    # Continue with rest of pipeline
+    run_from_transcript(paths, config, stage='transcribed')
+
+def run_full_pipeline(config):
+    # make the experiment directory
+    experiment_dir = f'experiments/{config["name"]}'
+    os.makedirs(experiment_dir, exist_ok=True)
+    paths = ProjectPaths(experiment_dir)
+    
+    aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': paths.audio}
+    vid_opts = {'format': 'mp4/bestvideo/best', 'outtmpl': paths.input_video}
+    
+    if config['download']:
+        download_youtube_video(config['url'], aud_opts, vid_opts)
+    else:
+        assert config['input_file'], "Input file is required when download is set to false"
+        process_local_video(config['input_file'], paths.input_video, paths.audio)
+    
+    # Continue from audio
+    run_from_audio(paths, config)
 
 def main():
-    args = parse_arguments()
-    subtitle_video(args)
+    args, config = parse_arguments()
+    
+    if args.from_transcript:
+        # Setup paths for existing files
+        experiment_dir = os.path.dirname(args.transcript)
+        paths = ProjectPaths(experiment_dir)
+        paths.input_video = args.video
+        
+        # Set transcript path based on stage
+        if args.from_transcript == 'transcribed':
+            paths.transcribed_csv = args.transcript
+        elif args.from_transcript == 'translated':
+            paths.translated_csv = args.transcript
+        elif args.from_transcript == 'refined':
+            paths.refined_csv = args.transcript
+            
+        run_from_transcript(paths, config, stage=args.from_transcript)
+        
+    elif args.from_audio:
+        experiment_dir = f'experiments/{config["name"]}'
+        os.makedirs(experiment_dir, exist_ok=True)
+        paths = ProjectPaths(experiment_dir)
+        run_from_audio(paths, config)
+        
+    else:
+        # Full pipeline (existing behavior)
+        run_full_pipeline(config)
 
 if __name__ == '__main__':
     main()
