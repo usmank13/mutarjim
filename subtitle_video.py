@@ -136,32 +136,15 @@ def fix_subtitles(subs_df, openai_client):
     )
     return completion.choices[0].message.content
 
-def generate_subtitle_clip(txt, font_size, stroke_width):
-    text_clip = TextClip(
-        font='Arial-Bold',
-        text=txt,  
-        font_size=font_size,
-        color='white', 
-        stroke_color='black', 
-        stroke_width=stroke_width,
-        text_align='center',
-        method='caption'
-    ).with_duration(10)
-    
-    text_clip = text_clip.with_position('center')
-    text_clip_w, text_clip_h = text_clip.size
-    
-    background_clip = ColorClip(size=(text_clip_w + 20, text_clip_h + 10), color=(0, 0, 0), duration=text_clip.duration).with_opacity(0.8)
-    
-    composite_clip = CompositeVideoClip([background_clip, text_clip.with_position('center')], size=(text_clip_w + 20, text_clip_h + 10))
-    
-    return composite_clip.with_position('center')
 
 def create_captioned_vid(vid_path, subs_df, save_dir):
     # TODO: this is broken in general, perhaps not compatible with the version
     # of moviepy we are now using (latest)
     video = VideoFileClip(vid_path)
     width, height = video.w, video.h
+    
+    # Define subtitle area dimensions
+    subtitle_height = int(height * 0.2)  # 20% of video height for subtitle area
     
     def generator(txt):
         return TextClip(
@@ -170,7 +153,7 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
             stroke_width=2,     # Increased stroke width for better visibility
             color='white',      
             stroke_color='black',
-            size=(width, int(height*.35)),  # Slightly larger text area
+            size=(width, subtitle_height),  # Match background height
             method='caption',
         ).with_opacity(0.95)    # Slight transparency for aesthetics
 
@@ -179,12 +162,18 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     subtitles = SubtitlesClip(subs, make_textclip=generator)
     
     # Add a semi-transparent black background behind subtitles for better readability
-    background = ColorClip(size=(int(width), int(height*.15)), 
+    # Use the same height as subtitle area and position at exact bottom
+    background = ColorClip(size=(width, subtitle_height), 
                           color=(0,0,0)).\
                           with_opacity(0.6).\
-                          with_position(('center', 'bottom'))
+                          with_position((0, height - subtitle_height))
     
-    final = CompositeVideoClip([video, background, subtitles.with_position(('center','bottom'))])
+    # Position subtitles to align with background
+    final = CompositeVideoClip([
+        video, 
+        background, 
+        subtitles.with_position((0, height - subtitle_height))
+    ])
     final = final.with_duration(video.duration)
     
     output_path = os.path.join(save_dir, 'output_vid.mp4')
