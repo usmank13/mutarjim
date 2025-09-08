@@ -146,10 +146,11 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     # Define subtitle area dimensions
     subtitle_height = int(height * 0.2)  # 20% of video height for subtitle area
     
+    # TODO: maybe set size to a fixed percentage of the image
     def generator(txt):
         return TextClip(
             text=txt,   # Try simpler font name
-            font_size=int(width/30),  # Increased font size
+            font_size=int(max(width, height)/30),  # Increased font size
             stroke_width=2,     # Increased stroke width for better visibility
             color='white',      
             stroke_color='black',
@@ -176,20 +177,28 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     ])
     final = final.with_duration(video.duration)
     
+    # Ensure audio is preserved from original video
+    if video.audio is not None:
+        final = final.with_audio(video.audio)
+    
     output_path = os.path.join(save_dir, 'output_vid.mp4')
     final.write_videofile(output_path, fps=video.fps, remove_temp=True, codec="libx264", audio_codec="aac")
     
     return final
 
-def download_youtube_video(url, aud_opts, vid_opts):
-    with YoutubeDL(aud_opts) as ydl:
+def download_youtube_video(url, combined_opts, aud_opts):
+    # Download combined video+audio (yt-dlp handles merging automatically)
+    with YoutubeDL(combined_opts) as ydl:
         ydl.download([url])
-    with YoutubeDL(vid_opts) as ydl:
+    
+    # Download separate audio for transcription
+    with YoutubeDL(aud_opts) as ydl:
         ydl.download([url])
 
 def process_local_video(input_path, output_video_path, output_audio_path):
     video = VideoFileClip(input_path)
-    video.write_videofile(output_video_path)
+    # Preserve audio when writing video file
+    video.write_videofile(output_video_path, audio_codec="aac")
     video.audio.write_audiofile(output_audio_path)
 
 # using the local model
@@ -307,11 +316,15 @@ def run_full_pipeline(config):
     os.makedirs(experiment_dir, exist_ok=True)
     paths = ProjectPaths(experiment_dir)
     
-    aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': paths.audio}
-    vid_opts = {'format': 'mp4/bestvideo/best', 'outtmpl': paths.input_video}
-    
     if config['download']:
-        download_youtube_video(config['url'], aud_opts, vid_opts)
+        # Let yt-dlp merge best video + best audio automatically
+        combined_opts = {
+            'format': 'bestvideo+bestaudio/best',
+            'outtmpl': paths.input_video
+        }
+        aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': paths.audio}
+        
+        download_youtube_video(config['url'], combined_opts, aud_opts)
     else:
         assert config['input_file'], "Input file is required when download is set to false"
         process_local_video(config['input_file'], paths.input_video, paths.audio)

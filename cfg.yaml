@@ -1,10 +1,10 @@
 # cfg.yaml
 version: 1.0
-name: test
+name: repaying_debt_unknown
 download: true
 input_file: null
 use_api: false
-url: https://www.youtube.com/watch?v=EvkKtYIHCQQ
+url: https://www.youtube.com/watch?v=H7hjHS9zXMc
 llm_refine: false
 model_type: medium
 source_language: arabic
