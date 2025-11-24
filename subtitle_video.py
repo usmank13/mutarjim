@@ -185,30 +185,39 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     
     return final
 
-def find_downloaded_video(experiment_dir, base_name='input'):
-    """Find the actual video file that was downloaded, regardless of extension."""
-    video_extensions = ['.mp4', '.webm', '.mkv', '.avi']
-    
-    # First try the exact base_name with common extensions
-    for ext in video_extensions:
+def find_downloaded_file(experiment_dir, base_name, extensions):
+    """Find the actual file that was downloaded, regardless of extension or double extensions."""
+    # First try the exact base_name with single extensions
+    for ext in extensions:
         path = os.path.join(experiment_dir, f'{base_name}{ext}')
         if os.path.exists(path):
             return path
     
-    # If not found, look for files starting with base_name (like input.f625.mp4)
+    # If not found, look for files starting with base_name
     if os.path.exists(experiment_dir):
         for filename in os.listdir(experiment_dir):
-            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in video_extensions):
-                # Prefer files without format codes (e.g., prefer input.mp4 over input.f625.mp4)
-                if not any(char.isdigit() for char in filename.replace(base_name, '').replace('.mp4', '').replace('.webm', '')):
+            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in extensions):
+                # Prefer files with single extensions (e.g., prefer audio.mp3 over audio.mp3.mp3)
+                parts = filename.replace(base_name, '', 1).split('.')
+                if len(parts) <= 2:  # base_name + one extension
                     return os.path.join(experiment_dir, filename)
         
-        # If still not found, return any video file starting with base_name
+        # If still not found, return any file starting with base_name (even with double extensions)
         for filename in os.listdir(experiment_dir):
-            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in video_extensions):
+            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in extensions):
                 return os.path.join(experiment_dir, filename)
     
     return None
+
+def find_downloaded_video(experiment_dir, base_name='input'):
+    """Find the actual video file that was downloaded, regardless of extension."""
+    video_extensions = ['.mp4', '.webm', '.mkv', '.avi']
+    return find_downloaded_file(experiment_dir, base_name, video_extensions)
+
+def find_downloaded_audio(experiment_dir, base_name='audio'):
+    """Find the actual audio file that was downloaded, regardless of extension."""
+    audio_extensions = ['.mp3', '.m4a', '.wav', '.opus', '.ogg']
+    return find_downloaded_file(experiment_dir, base_name, audio_extensions)
 
 def download_youtube_video(url, combined_opts, aud_opts):
     # Download combined video+audio (yt-dlp handles merging automatically)
@@ -342,14 +351,18 @@ def run_full_pipeline(config):
     
     if config['download']:
         # Let yt-dlp merge best video + best audio automatically
+        # Use outtmpl without extension to avoid double extensions
+        video_base = os.path.join(experiment_dir, 'input')
+        audio_base = os.path.join(experiment_dir, 'audio')
+        
         combined_opts = {
             'format': 'bestvideo+bestaudio/best',
-            'outtmpl': paths.input_video,
+            'outtmpl': video_base + '.%(ext)s',
             'merge_output_format': 'mp4',  # Force merge into mp4
         }
         aud_opts = {
-            'format': 'mp3/bestaudio/best',
-            'outtmpl': paths.audio,
+            'format': 'bestaudio/best',
+            'outtmpl': audio_base + '.%(ext)s',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -358,13 +371,21 @@ def run_full_pipeline(config):
         
         download_youtube_video(config['url'], combined_opts, aud_opts)
         
-        # Find the actual video file that was downloaded
+        # Find the actual files that were downloaded
         actual_video = find_downloaded_video(experiment_dir, 'input')
+        actual_audio = find_downloaded_audio(experiment_dir, 'audio')
+        
         if actual_video:
             paths.input_video = actual_video
             print(f"Found downloaded video: {actual_video}")
         else:
             raise FileNotFoundError(f"Could not find downloaded video in {experiment_dir}")
+        
+        if actual_audio:
+            paths.audio = actual_audio
+            print(f"Found downloaded audio: {actual_audio}")
+        else:
+            raise FileNotFoundError(f"Could not find downloaded audio in {experiment_dir}")
     else:
         assert config['input_file'], "Input file is required when download is set to false"
         process_local_video(config['input_file'], paths.input_video, paths.audio)
