@@ -138,8 +138,7 @@ def fix_subtitles(subs_df, openai_client):
 
 
 def create_captioned_vid(vid_path, subs_df, save_dir):
-    # TODO: this is broken in general, perhaps not compatible with the version
-    # of moviepy we are now using (latest)
+
     video = VideoFileClip(vid_path)
     width, height = video.w, video.h
     
@@ -185,6 +184,31 @@ def create_captioned_vid(vid_path, subs_df, save_dir):
     final.write_videofile(output_path, fps=video.fps, remove_temp=True, codec="libx264", audio_codec="aac")
     
     return final
+
+def find_downloaded_video(experiment_dir, base_name='input'):
+    """Find the actual video file that was downloaded, regardless of extension."""
+    video_extensions = ['.mp4', '.webm', '.mkv', '.avi']
+    
+    # First try the exact base_name with common extensions
+    for ext in video_extensions:
+        path = os.path.join(experiment_dir, f'{base_name}{ext}')
+        if os.path.exists(path):
+            return path
+    
+    # If not found, look for files starting with base_name (like input.f625.mp4)
+    if os.path.exists(experiment_dir):
+        for filename in os.listdir(experiment_dir):
+            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in video_extensions):
+                # Prefer files without format codes (e.g., prefer input.mp4 over input.f625.mp4)
+                if not any(char.isdigit() for char in filename.replace(base_name, '').replace('.mp4', '').replace('.webm', '')):
+                    return os.path.join(experiment_dir, filename)
+        
+        # If still not found, return any video file starting with base_name
+        for filename in os.listdir(experiment_dir):
+            if filename.startswith(base_name) and any(filename.endswith(ext) for ext in video_extensions):
+                return os.path.join(experiment_dir, filename)
+    
+    return None
 
 def download_youtube_video(url, combined_opts, aud_opts):
     # Download combined video+audio (yt-dlp handles merging automatically)
@@ -320,11 +344,27 @@ def run_full_pipeline(config):
         # Let yt-dlp merge best video + best audio automatically
         combined_opts = {
             'format': 'bestvideo+bestaudio/best',
-            'outtmpl': paths.input_video
+            'outtmpl': paths.input_video,
+            'merge_output_format': 'mp4',  # Force merge into mp4
         }
-        aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': paths.audio}
+        aud_opts = {
+            'format': 'mp3/bestaudio/best',
+            'outtmpl': paths.audio,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+            }]
+        }
         
         download_youtube_video(config['url'], combined_opts, aud_opts)
+        
+        # Find the actual video file that was downloaded
+        actual_video = find_downloaded_video(experiment_dir, 'input')
+        if actual_video:
+            paths.input_video = actual_video
+            print(f"Found downloaded video: {actual_video}")
+        else:
+            raise FileNotFoundError(f"Could not find downloaded video in {experiment_dir}")
     else:
         assert config['input_file'], "Input file is required when download is set to false"
         process_local_video(config['input_file'], paths.input_video, paths.audio)
