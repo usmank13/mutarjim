@@ -270,20 +270,27 @@ def create_subtitles_df(result):
         'text': [segment['text'] for segment in result['segments']]
     })
 
+def _format_timedelta(seconds, sep=','):
+    """Format seconds (int/float) into HH:MM:SS,mmm (SRT) or HH:MM:SS.mmm (VTT)."""
+    total_ms = int(round(seconds * 1000))
+    hrs, remainder = divmod(total_ms, 3_600_000)
+    mins, remainder = divmod(remainder, 60_000)
+    secs, ms = divmod(remainder, 1000)
+    return f"{hrs:02d}:{mins:02d}:{secs:02d}{sep}{ms:03d}"
+
+
 def export_subtitles(subs_df, format, output_path):
     if format == 'srt':
         with open(output_path, 'w', encoding='utf-8') as f:
             for i, row in subs_df.iterrows():
                 f.write(f"{i+1}\n")
-                f.write(f"{pd.to_timedelta(row['start'], unit='s').strftime('%H:%M:%S,%f')[:-3]} --> ")
-                f.write(f"{pd.to_timedelta(row['end'], unit='s').strftime('%H:%M:%S,%f')[:-3]}\n")
+                f.write(f"{_format_timedelta(row['start'], ',')} --> {_format_timedelta(row['end'], ',')}\n")
                 f.write(f"{row['text']}\n\n")
     elif format == 'vtt':
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("WEBVTT\n\n")
             for i, row in subs_df.iterrows():
-                f.write(f"{pd.to_timedelta(row['start'], unit='s').strftime('%H:%M:%S.%f')[:-3]} --> ")
-                f.write(f"{pd.to_timedelta(row['end'], unit='s').strftime('%H:%M:%S.%f')[:-3]}\n")
+                f.write(f"{_format_timedelta(row['start'], '.')} --> {_format_timedelta(row['end'], '.')}\n")
                 f.write(f"{row['text']}\n\n")
     else:
         raise ValueError(f"Unsupported subtitle format: {format}")
