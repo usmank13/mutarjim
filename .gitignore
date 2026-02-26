@@ -38,4 +38,6 @@ htmlcov/
 .ipynb_checkpoints
 
 # Environment variables
-.env
+.envvenv/
+__pycache__/
+.pytest_cache/

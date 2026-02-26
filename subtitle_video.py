@@ -152,33 +152,42 @@ def create_subtitles_df(result):
         'text': [segment['text'] for segment in result['segments']]
     })
 
+def _format_timedelta(seconds, separator=','):
+    """Format seconds into HH:MM:SS,mmm (SRT) or HH:MM:SS.mmm (VTT) timestamp."""
+    td = pd.to_timedelta(seconds, unit='s')
+    total_seconds = int(td.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    millis = int(td.microseconds / 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}{separator}{millis:03d}"
+
 def export_subtitles(subs_df, format, output_path):
     if format == 'srt':
         with open(output_path, 'w', encoding='utf-8') as f:
             for i, row in subs_df.iterrows():
                 f.write(f"{i+1}\n")
-                f.write(f"{pd.to_timedelta(row['start'], unit='s').strftime('%H:%M:%S,%f')[:-3]} --> ")
-                f.write(f"{pd.to_timedelta(row['end'], unit='s').strftime('%H:%M:%S,%f')[:-3]}\n")
+                f.write(f"{_format_timedelta(row['start'], ',')} --> {_format_timedelta(row['end'], ',')}\n")
                 f.write(f"{row['text']}\n\n")
     elif format == 'vtt':
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("WEBVTT\n\n")
             for i, row in subs_df.iterrows():
-                f.write(f"{pd.to_timedelta(row['start'], unit='s').strftime('%H:%M:%S.%f')[:-3]} --> ")
-                f.write(f"{pd.to_timedelta(row['end'], unit='s').strftime('%H:%M:%S.%f')[:-3]}\n")
+                f.write(f"{_format_timedelta(row['start'], '.')} --> {_format_timedelta(row['end'], '.')}\n")
                 f.write(f"{row['text']}\n\n")
     else:
         raise ValueError(f"Unsupported subtitle format: {format}")
 
 def subtitle_video(args):
     # make the experiment directory
-    experiment_dir = f'experiments/{args['name']}'
+    experiment_dir = f"experiments/{args['name']}"
     os.makedirs(experiment_dir, exist_ok=True)
     
     # get the file paths
     input_file = os.path.join(experiment_dir, 'input.mp4')
     audio_file = os.path.join(experiment_dir, 'audio.mp3')
-    output_file = os.path.join(experiment_dir, f'output.{args['output_format']}')
+    output_format = args.get('output_format', 'mp4')
+    output_file = os.path.join(experiment_dir, f"output.{output_format}")
     
     aud_opts = {'format': 'mp3/bestaudio/best', 'outtmpl': audio_file}
     vid_opts = {'format': 'mp4/bestvideo/best', 'outtmpl': input_file}
@@ -190,22 +199,23 @@ def subtitle_video(args):
         process_local_video(args['input_file'], input_file, audio_file)
     
     openai_client = setup_openai_client()
-    if args.use_api: # new, using the api
+    if args.get('use_api', False):
         result = transcribe_api(openai_client, audio_file)
-    else: # what we already had
+    else:
         result = transcribe_audio(audio_file, args['model_type'], args['source_language'])
     subs_df = create_subtitles_df(result)
-    subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'))
+    subs_df.to_csv(os.path.join(experiment_dir, 'subs.csv'), index=False)
     
-    if args.llm_refine: # 
+    if args.get('llm_refine', False):
         fixed_subs = fix_subtitles(subs_df, openai_client)
         subs_df = pd.read_csv(StringIO(fixed_subs))
-        subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'))
+        subs_df.to_csv(os.path.join(experiment_dir, 'subs_auto_edited.csv'), index=False)
     
-    if args.output_format == 'mp4':
+    output_format = args.get('output_format', 'mp4')
+    if output_format == 'mp4':
         create_captioned_vid(input_file, subs_df, experiment_dir)
     else:
-        export_subtitles(subs_df, args.output_format, output_file)
+        export_subtitles(subs_df, output_format, output_file)
 
 def main():
     args = parse_arguments()
