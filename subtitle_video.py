@@ -1,6 +1,7 @@
 import argparse
 from dataclasses import dataclass
 from io import StringIO
+import logging
 import os
 import torch
 import openai
@@ -9,7 +10,11 @@ import whisper
 from moviepy import VideoFileClip, TextClip, CompositeVideoClip, ColorClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError, ExtractorError
 import yaml
+from pydub import AudioSegment
+
+logger = logging.getLogger(__name__)
 
 # TODO: improve visuals of the font, etc. 
 # TODO: support for longer videos
@@ -219,14 +224,57 @@ def find_downloaded_audio(experiment_dir, base_name='audio'):
     audio_extensions = ['.mp3', '.m4a', '.wav', '.opus', '.ogg']
     return find_downloaded_file(experiment_dir, base_name, audio_extensions)
 
+class VideoDownloadError(Exception):
+    """Raised when a YouTube video download fails."""
+    pass
+
+
 def download_youtube_video(url, combined_opts, aud_opts):
-    # Download combined video+audio (yt-dlp handles merging automatically)
-    with YoutubeDL(combined_opts) as ydl:
-        ydl.download([url])
+    """Download video and audio from YouTube with graceful error handling.
     
-    # Download separate audio for transcription
-    with YoutubeDL(aud_opts) as ydl:
-        ydl.download([url])
+    Raises:
+        VideoDownloadError: with a human-readable message on failure.
+    """
+    try:
+        # Download combined video+audio (yt-dlp handles merging automatically)
+        with YoutubeDL(combined_opts) as ydl:
+            ydl.download([url])
+        
+        # Download separate audio for transcription
+        with YoutubeDL(aud_opts) as ydl:
+            ydl.download([url])
+    except DownloadError as e:
+        msg = str(e).lower()
+        if 'geo' in msg or 'not available in your country' in msg:
+            raise VideoDownloadError(
+                f"Video is geo-blocked and not available in your region: {url}"
+            ) from e
+        elif 'private video' in msg or 'video unavailable' in msg or 'not available' in msg:
+            raise VideoDownloadError(
+                f"Video is unavailable or private: {url}\n"
+                "Check that the video exists and is publicly accessible."
+            ) from e
+        elif 'age' in msg or 'sign in' in msg or 'login' in msg:
+            raise VideoDownloadError(
+                f"Video is age-restricted and requires authentication: {url}\n"
+                "Try providing cookies via yt-dlp's --cookies option."
+            ) from e
+        elif 'urlopen error' in msg or 'connection' in msg or 'timed out' in msg:
+            raise VideoDownloadError(
+                f"Network error while downloading {url}. Check your internet connection."
+            ) from e
+        else:
+            raise VideoDownloadError(
+                f"Failed to download video from {url}: {e}"
+            ) from e
+    except ExtractorError as e:
+        raise VideoDownloadError(
+            f"Could not extract video info from {url}: {e}"
+        ) from e
+    except Exception as e:
+        raise VideoDownloadError(
+            f"Unexpected error downloading {url}: {e}"
+        ) from e
 
 def process_local_video(input_path, output_video_path, output_audio_path):
     video = VideoFileClip(input_path)
@@ -234,22 +282,105 @@ def process_local_video(input_path, output_video_path, output_audio_path):
     video.write_videofile(output_video_path, audio_codec="aac")
     video.audio.write_audiofile(output_audio_path)
 
+CHUNK_DURATION_MS = 30 * 60 * 1000  # 30 minutes in milliseconds
+CHUNK_OVERLAP_MS = 30 * 1000         # 30 second overlap to avoid cutting mid-sentence
+
+
+def split_audio_into_chunks(audio_path, chunk_duration_ms=CHUNK_DURATION_MS,
+                            overlap_ms=CHUNK_OVERLAP_MS):
+    """Split an audio file into chunks. Returns list of (chunk_path, offset_seconds).
+    
+    offset_seconds is the start time of each chunk relative to the original audio.
+    """
+    audio = AudioSegment.from_file(audio_path)
+    duration_ms = len(audio)
+    
+    if duration_ms <= chunk_duration_ms:
+        return [(audio_path, 0.0)]
+    
+    chunks = []
+    chunk_dir = os.path.join(os.path.dirname(audio_path), '_chunks')
+    os.makedirs(chunk_dir, exist_ok=True)
+    
+    start_ms = 0
+    idx = 0
+    while start_ms < duration_ms:
+        end_ms = min(start_ms + chunk_duration_ms, duration_ms)
+        chunk = audio[start_ms:end_ms]
+        chunk_path = os.path.join(chunk_dir, f'chunk_{idx:03d}.mp3')
+        chunk.export(chunk_path, format='mp3')
+        chunks.append((chunk_path, start_ms / 1000.0))
+        start_ms = end_ms - overlap_ms  # overlap to avoid cut mid-sentence
+        if start_ms >= duration_ms:
+            break
+        idx += 1
+    
+    return chunks
+
+
+def merge_chunked_results(chunk_results):
+    """Merge transcription results from multiple chunks, deduplicating overlaps.
+    
+    Each element in chunk_results is (result_dict, offset_seconds).
+    Returns a single result dict with merged segments.
+    """
+    if len(chunk_results) == 1:
+        return chunk_results[0][0]
+    
+    all_segments = []
+    full_text_parts = []
+    
+    for result, offset in chunk_results:
+        for segment in result.get('segments', []):
+            adjusted_seg = {
+                'start': segment['start'] + offset,
+                'end': segment['end'] + offset,
+                'text': segment['text'],
+            }
+            all_segments.append(adjusted_seg)
+    
+    # Sort by start time and deduplicate overlapping segments
+    all_segments.sort(key=lambda s: s['start'])
+    merged = []
+    for seg in all_segments:
+        if merged and seg['start'] < merged[-1]['end'] - 1.0:
+            # Skip segments that overlap significantly with the previous one
+            # (likely from the overlap region)
+            continue
+        merged.append(seg)
+    
+    full_text = ' '.join(s['text'].strip() for s in merged)
+    return {'text': full_text, 'segments': merged}
+
+
 # using the local model
 def transcribe_audio(audio_path, model_type, lang):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = whisper.load_model(model_type, device=device)
-    return model.transcribe(audio_path, task='transcribe', language=lang)
+    
+    chunks = split_audio_into_chunks(audio_path)
+    if len(chunks) == 1:
+        return model.transcribe(audio_path, task='transcribe', language=lang)
+    
+    logger.info(f"Audio split into {len(chunks)} chunks for transcription")
+    chunk_results = []
+    for chunk_path, offset in chunks:
+        logger.info(f"Transcribing chunk at offset {offset:.0f}s: {chunk_path}")
+        result = model.transcribe(chunk_path, task='transcribe', language=lang)
+        chunk_results.append((result, offset))
+    
+    return merge_chunked_results(chunk_results)
 
 # using the api
-def transcribe_api(openai_client, audio_path):
-    audio_file = open(audio_path, "rb")
-    transcription = openai_client.audio.transcriptions.create(
-        model="whisper-1", 
-        file=audio_file,
-        response_format='verbose_json'
-    )
-    # Convert the API response to a dictionary format similar to the local model output
-    result = {
+def _transcribe_api_single(openai_client, audio_path):
+    """Transcribe a single audio file via the OpenAI Whisper API."""
+    with open(audio_path, "rb") as audio_file:
+        transcription = openai_client.audio.transcriptions.create(
+            model="whisper-1", 
+            file=audio_file,
+            response_format='verbose_json'
+        )
+    return {
         "text": transcription.text,
         "segments": [
             {
@@ -260,8 +391,21 @@ def transcribe_api(openai_client, audio_path):
             for segment in transcription.segments
         ]
     }
+
+
+def transcribe_api(openai_client, audio_path):
+    chunks = split_audio_into_chunks(audio_path)
+    if len(chunks) == 1:
+        return _transcribe_api_single(openai_client, audio_path)
     
-    return result
+    logger.info(f"Audio split into {len(chunks)} chunks for API transcription")
+    chunk_results = []
+    for chunk_path, offset in chunks:
+        logger.info(f"Transcribing chunk at offset {offset:.0f}s: {chunk_path}")
+        result = _transcribe_api_single(openai_client, chunk_path)
+        chunk_results.append((result, offset))
+    
+    return merge_chunked_results(chunk_results)
 
 def create_subtitles_df(result):
     return pd.DataFrame({
