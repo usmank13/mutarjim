@@ -1,5 +1,6 @@
 """Tests for audio chunking and transcription merging."""
 import os
+import shutil
 import sys
 from unittest import mock
 
@@ -79,7 +80,7 @@ class TestMergeChunkedResults:
         assert merged['text'] == 'hello world'
 
 
-@pytest.mark.skipif(not HAS_PYDUB, reason="pydub not installed")
+@pytest.mark.skipif(not HAS_PYDUB or shutil.which('ffmpeg') is None, reason="pydub not installed or ffmpeg not available")
 class TestSplitAudioIntoChunks:
     def test_short_audio_no_split(self, tmp_path):
         """Audio shorter than chunk duration should return single chunk."""
