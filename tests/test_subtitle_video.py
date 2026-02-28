@@ -1,19 +1,18 @@
 """Tests for subtitle_video.py — unit tests that don't require video files or API keys."""
-import os
+
 import sys
-import tempfile
 from unittest import mock
 
 import pytest
 import pandas as pd
 
 # Mock heavy dependencies before importing subtitle_video
-sys.modules.setdefault('whisper', mock.MagicMock())
-sys.modules.setdefault('moviepy', mock.MagicMock())
-sys.modules.setdefault('moviepy.video', mock.MagicMock())
-sys.modules.setdefault('moviepy.video.tools', mock.MagicMock())
-sys.modules.setdefault('moviepy.video.tools.subtitles', mock.MagicMock())
-sys.modules.setdefault('yt_dlp', mock.MagicMock())
+sys.modules.setdefault("whisper", mock.MagicMock())
+sys.modules.setdefault("moviepy", mock.MagicMock())
+sys.modules.setdefault("moviepy.video", mock.MagicMock())
+sys.modules.setdefault("moviepy.video.tools", mock.MagicMock())
+sys.modules.setdefault("moviepy.video.tools.subtitles", mock.MagicMock())
+sys.modules.setdefault("yt_dlp", mock.MagicMock())
 
 from subtitle_video import (
     _format_timedelta,
@@ -25,22 +24,22 @@ from subtitle_video import (
 
 class TestFormatTimedelta:
     def test_zero(self):
-        assert _format_timedelta(0, ',') == "00:00:00,000"
+        assert _format_timedelta(0, ",") == "00:00:00,000"
 
     def test_simple_seconds(self):
-        assert _format_timedelta(5, ',') == "00:00:05,000"
+        assert _format_timedelta(5, ",") == "00:00:05,000"
 
     def test_minutes_and_seconds(self):
-        assert _format_timedelta(125, ',') == "00:02:05,000"
+        assert _format_timedelta(125, ",") == "00:02:05,000"
 
     def test_hours(self):
-        assert _format_timedelta(3661, ',') == "01:01:01,000"
+        assert _format_timedelta(3661, ",") == "01:01:01,000"
 
     def test_vtt_separator(self):
-        assert _format_timedelta(10, '.') == "00:00:10.000"
+        assert _format_timedelta(10, ".") == "00:00:10.000"
 
     def test_fractional_seconds(self):
-        result = _format_timedelta(1.5, ',')
+        result = _format_timedelta(1.5, ",")
         assert result == "00:00:01,500"
 
 
@@ -68,11 +67,13 @@ class TestCreateSubtitlesDf:
 class TestExportSubtitles:
     @pytest.fixture
     def sample_df(self):
-        return pd.DataFrame({
-            "start": [0, 5, 12],
-            "end": [5, 12, 20],
-            "text": ["First line", "Second line", "Third line"],
-        })
+        return pd.DataFrame(
+            {
+                "start": [0, 5, 12],
+                "end": [5, 12, 20],
+                "text": ["First line", "Second line", "Third line"],
+            }
+        )
 
     def test_srt_export(self, sample_df, tmp_path):
         output = tmp_path / "test.srt"

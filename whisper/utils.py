@@ -46,7 +46,7 @@ def format_timestamp(seconds: float, always_include_hours: bool = False):
 
 def write_txt(transcript: Iterator[dict], file: TextIO):
     for segment in transcript:
-        print(segment['text'].strip(), file=file, flush=True)
+        print(segment["text"].strip(), file=file, flush=True)
 
 
 def write_vtt(transcript: Iterator[dict], file: TextIO):

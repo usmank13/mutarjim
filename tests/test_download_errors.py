@@ -1,15 +1,19 @@
 """Tests for graceful yt-dlp error handling."""
+
 import sys
 from unittest import mock
 
 import pytest
 
+
 # Create proper exception hierarchy that subtitle_video will import
 class _DownloadError(Exception):
     pass
 
+
 class _ExtractorError(Exception):
     pass
+
 
 # Build mock yt_dlp with real exception classes
 _mock_yt_dlp = mock.MagicMock()
@@ -18,17 +22,24 @@ _mock_utils.DownloadError = _DownloadError
 _mock_utils.ExtractorError = _ExtractorError
 _mock_yt_dlp.utils = _mock_utils
 
-sys.modules['yt_dlp'] = _mock_yt_dlp
-sys.modules['yt_dlp.utils'] = _mock_utils
+sys.modules["yt_dlp"] = _mock_yt_dlp
+sys.modules["yt_dlp.utils"] = _mock_utils
 
 # Mock other heavy deps
-for mod in ['whisper', 'moviepy', 'moviepy.video', 'moviepy.video.tools',
-            'moviepy.video.tools.subtitles', 'torch', 'pydub']:
+for mod in [
+    "whisper",
+    "moviepy",
+    "moviepy.video",
+    "moviepy.video.tools",
+    "moviepy.video.tools.subtitles",
+    "torch",
+    "pydub",
+]:
     sys.modules.setdefault(mod, mock.MagicMock())
 
 # Force reimport
-if 'subtitle_video' in sys.modules:
-    del sys.modules['subtitle_video']
+if "subtitle_video" in sys.modules:
+    del sys.modules["subtitle_video"]
 
 from subtitle_video import download_youtube_video, VideoDownloadError
 
