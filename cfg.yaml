@@ -1,11 +1,11 @@
 # cfg.yaml
 version: 1.0
-name: albadr_thinking_about_sins
+name: txi_CKKx5e0
 download: true
 input_file: null
 use_api: false
-url: https://www.youtube.com/shorts/AEchbLmt6qo
+url: https://www.youtube.com/watch?v=txi-CKKx5e0
 llm_refine: false
 model_type: medium
 source_language: arabic
-output_format: mp4
+output_format: srt

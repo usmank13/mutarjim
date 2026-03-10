@@ -4,7 +4,7 @@ from io import StringIO
 import logging
 import os
 import torch
-import openai
+import anthropic
 import pandas as pd
 import whisper
 from moviepy import VideoFileClip, TextClip, CompositeVideoClip, ColorClip
@@ -96,11 +96,11 @@ def parse_arguments():
     return args, config
 
 
-def setup_openai_client():
-    return openai.Client()
+def setup_anthropic_client():
+    return anthropic.Anthropic()
 
 
-def translate_subtitles(subs_df, openai_client, target_lang="English"):
+def translate_subtitles(subs_df, client, target_lang="English"):
     prompt = f"""Translate the following Arabic subtitles to {target_lang}.
     Maintain the timing and structure. Provide natural, fluent translations that preserve the original meaning.
     This is from an Islamic lecture. Note that the transcription may have errors due to similar sounding words.
@@ -118,52 +118,33 @@ def translate_subtitles(subs_df, openai_client, target_lang="English"):
 
 {subs_df.to_string()}"""
 
-    completion = openai_client.chat.completions.create(
-        model="gpt-5-mini",
-        # temperature=0.1,
-        messages=[
-            {
-                "role": "system",
-                "content": f"You are a skilled translator specializing in Arabic to {target_lang} translation.",
-            },
-            {"role": "user", "content": prompt},
-        ],
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system=f"You are a skilled translator specializing in Arabic to {target_lang} translation.",
+        messages=[{"role": "user", "content": prompt}],
     )
 
-    response = completion.choices[0].message.content
+    response = message.content[0].text
     print(response)
-
-    # Try to extract just the CSV part if there's extra text
-    # lines = response.strip().split('\n')
-    # csv_lines = []
-    # for line in lines:
-    #     if ',' in line and not line.startswith('#'):
-    #         csv_lines.append(line)
-
-    # csv_content = '\n'.join(csv_lines)
     return response
 
 
-def fix_subtitles(subs_df, openai_client):
+def fix_subtitles(subs_df, client):
     prompt = f"""Here are English subtitles translated from Arabic.
     There may be minor mistakes or awkward phrasings. Please refine these English subtitles for better coherence and fluency,
     while staying as true to the original meaning as possible. Do not translate back to Arabic. It is from an Islamic lecture.
     Provide the results in the csv format, with nothing else, ensuring all rules for CSV parsing, such as appropriate
     use of escapes, are met.\n\n{subs_df.to_string()}"""
 
-    # should we set temperature?
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
         temperature=0.1,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a skilled English language editor, proficient in refining translations from Arabic to English.",
-            },
-            {"role": "user", "content": prompt},
-        ],
+        system="You are a skilled English language editor, proficient in refining translations from Arabic to English.",
+        messages=[{"role": "user", "content": prompt}],
     )
-    return completion.choices[0].message.content
+    return message.content[0].text
 
 
 def create_captioned_vid(vid_path, subs_df, save_dir):
@@ -297,8 +278,8 @@ def process_local_video(input_path, output_video_path, output_audio_path):
     video.audio.write_audiofile(output_audio_path)
 
 
-CHUNK_DURATION_MS = 30 * 60 * 1000  # 30 minutes in milliseconds
-CHUNK_OVERLAP_MS = 30 * 1000  # 30 second overlap to avoid cutting mid-sentence
+CHUNK_DURATION_MS = 2 * 60 * 1000  # 2 minutes in milliseconds
+CHUNK_OVERLAP_MS = 15 * 1000  # 15 second overlap to avoid cutting mid-sentence
 
 
 def split_audio_into_chunks(audio_path, chunk_duration_ms=CHUNK_DURATION_MS, overlap_ms=CHUNK_OVERLAP_MS):
@@ -324,9 +305,11 @@ def split_audio_into_chunks(audio_path, chunk_duration_ms=CHUNK_DURATION_MS, ove
         chunk_path = os.path.join(chunk_dir, f"chunk_{idx:03d}.mp3")
         chunk.export(chunk_path, format="mp3")
         chunks.append((chunk_path, start_ms / 1000.0))
-        start_ms = end_ms - overlap_ms  # overlap to avoid cut mid-sentence
-        if start_ms >= duration_ms:
+        # If we've reached the end, stop
+        if end_ms >= duration_ms:
             break
+        # Step forward by (chunk_duration - overlap)
+        start_ms += chunk_duration_ms - overlap_ms
         idx += 1
 
     return chunks
@@ -401,7 +384,7 @@ def _transcribe_api_single(openai_client, audio_path):
     }
 
 
-def transcribe_api(openai_client, audio_path):
+def transcribe_api(client, audio_path):
     chunks = split_audio_into_chunks(audio_path)
     if len(chunks) == 1:
         return _transcribe_api_single(openai_client, audio_path)
@@ -457,19 +440,19 @@ def load_transcript_csv(csv_path):
 
 
 def run_from_transcript(paths, config, stage="transcribed"):
-    openai_client = setup_openai_client()
+    client = setup_anthropic_client()
 
     # Load transcript from specified stage
     if stage == "transcribed":
         subs_df = load_transcript_csv(paths.transcribed_csv)
         # Continue with translation
-        translated_subs = translate_subtitles(subs_df, openai_client, config.get("target_language", "English"))
+        translated_subs = translate_subtitles(subs_df, client, config.get("target_language", "English"))
         subs_df = pd.read_csv(StringIO(translated_subs))
         subs_df.to_csv(paths.translated_csv)
 
         # Optional refinement
         if config.get("llm_refine"):
-            fixed_subs = fix_subtitles(subs_df, openai_client)
+            fixed_subs = fix_subtitles(subs_df, client)
             subs_df = pd.read_csv(StringIO(fixed_subs))
             subs_df.to_csv(paths.refined_csv)
 
@@ -477,7 +460,7 @@ def run_from_transcript(paths, config, stage="transcribed"):
         subs_df = load_transcript_csv(paths.translated_csv)
         # Optional refinement only
         if config.get("llm_refine"):
-            fixed_subs = fix_subtitles(subs_df, openai_client)
+            fixed_subs = fix_subtitles(subs_df, client)
             subs_df = pd.read_csv(StringIO(fixed_subs))
             subs_df.to_csv(paths.refined_csv)
 
@@ -495,11 +478,11 @@ def run_from_transcript(paths, config, stage="transcribed"):
 
 
 def run_from_audio(paths, config):
-    openai_client = setup_openai_client()
+    client = setup_anthropic_client()
 
     # Transcribe audio
     if config.get("use_api"):
-        result = transcribe_api(openai_client, paths.audio)
+        result = transcribe_api(client, paths.audio)
     else:
         result = transcribe_audio(paths.audio, config.get("model_type"), config.get("source_language"))
 
